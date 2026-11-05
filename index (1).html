@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marine Research Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#E6EFEC; --panel:#F6FAF8; --ink:#0F2B33; --muted:#5B7580; --line:#C5D6D1;
+  --temp:#D9532B; --hum:#1F6F8B;
+}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:400 16px/1.5 "IBM Plex Sans",system-ui,sans-serif;padding:0 20px 40px}
+.wrap{max-width:960px;margin:0 auto}
+header{padding:44px 0 28px;border-bottom:1px solid var(--line)}
+h1{font:400 clamp(2.4rem,7vw,4.2rem)/1 "Instrument Serif",Georgia,serif;letter-spacing:-.01em}
+header p{color:var(--muted);margin-top:10px;max-width:52ch}
+.status{display:inline-flex;align-items:center;gap:8px;margin-top:18px;font-size:.9rem;color:var(--muted)}
+.dot{width:10px;height:10px;border-radius:50%;background:#9AA9AE}
+.dot.live{background:#2E9E6B;box-shadow:0 0 0 4px rgba(46,158,107,.2)}
+.dot.stale{background:#D9A12B}
+.dot.err{background:#C0392B}
+.now{display:grid;grid-template-columns:1fr 1fr;gap:0;margin-top:32px;border:1px solid var(--line);background:var(--panel)}
+.now>div{padding:28px 26px}
+.now>div+div{border-left:1px solid var(--line)}
+.label{color:var(--muted);font-size:.95rem}
+.big{font:400 clamp(4rem,15vw,8rem)/1 "Instrument Serif",Georgia,serif;margin-top:6px;white-space:nowrap}
+.big small{font-size:.38em;margin-left:.08em;color:var(--muted)}
+.t .big{color:var(--temp)} .h .big{color:var(--hum)}
+.stats{display:flex;gap:18px;margin-top:14px;font-size:.88rem;color:var(--muted);flex-wrap:wrap}
+.stats b{color:var(--ink);font-weight:500}
+section.chart{margin-top:28px;border:1px solid var(--line);background:var(--panel);padding:22px 24px 14px}
+section.chart h2{font:400 1.6rem/1.1 "Instrument Serif",Georgia,serif}
+section.chart .sub{color:var(--muted);font-size:.88rem;margin-bottom:8px}
+svg{width:100%;height:auto;display:block;overflow:visible}
+svg text{font:400 11px "IBM Plex Sans",sans-serif;fill:var(--muted)}
+.msg{margin-top:28px;padding:18px 22px;border:1px solid var(--line);background:var(--panel);display:none}
+footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+@media (max-width:620px){
+  .now{grid-template-columns:1fr}
+  .now>div+div{border-left:0;border-top:1px solid var(--line)}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Marine Research Platform</h1>
+    <p>Deniz araştırma platformundan canlı sıcaklık ve nem ölçümleri.</p>
+    <div class="status"><span class="dot" id="dot"></span><span id="statusText">Veri bekleniyor…</span></div>
+  </header>
+
+  <div class="msg" id="msg"></div>
+
+  <div class="now">
+    <div class="t">
+      <div class="label">Sıcaklık</div>
+      <div class="big"><span id="tNow">--</span><small>°C</small></div>
+      <div class="stats"><span>En düşük <b id="tMin">--</b></span><span>Ortalama <b id="tAvg">--</b></span><span>En yüksek <b id="tMax">--</b></span></div>
+    </div>
+    <div class="h">
+      <div class="label">Nem</div>
+      <div class="big"><span id="hNow">--</span><small>%</small></div>
+      <div class="stats"><span>En düşük <b id="hMin">--</b></span><span>Ortalama <b id="hAvg">--</b></span><span>En yüksek <b id="hMax">--</b></span></div>
+    </div>
+  </div>
+
+  <section class="chart">
+    <h2>Sıcaklık</h2>
+    <div class="sub">Son 60 ölçüm, °C</div>
+    <svg id="tChart" viewBox="0 0 640 190" role="img" aria-label="Sıcaklık grafiği"></svg>
+  </section>
+
+  <section class="chart">
+    <h2>Nem</h2>
+    <div class="sub">Son 60 ölçüm, %</div>
+    <svg id="hChart" viewBox="0 0 640 190" role="img" aria-label="Nem grafiği"></svg>
+  </section>
+
+  <footer>
+    <span>Designed by Mekselina Das</span>
+    <span>Veri: ThingSpeak · her 20 saniyede yenilenir</span>
+  </footer>
+</div>
+
+<script>
+// ThingSpeak kanal numaranı buraya yaz (tırnak içinde, sadece rakamlar)
+const CHANNEL_ID = "3567349";
+const RESULTS = 60;
+const REFRESH_MS = 20000;
+
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 1) => v.toFixed(d).replace(".", ",");
+const timeFmt = d => d.toLocaleTimeString("tr-TR", {hour:"2-digit", minute:"2-digit"});
+
+function setStatus(kind, text){
+  $("dot").className = "dot " + kind;
+  $("statusText").textContent = text;
+}
+function showMsg(text){
+  const m = $("msg"); m.textContent = text; m.style.display = text ? "block" : "none";
+}
+
+function drawChart(svg, pts, color){
+  const W = 640, H = 190, L = 40, R = 12, T = 10, B = 26;
+  if (pts.length < 2){ svg.innerHTML = '<text x="'+L+'" y="'+(H/2)+'">Grafik için en az iki ölçüm gerekli.</text>'; return; }
+  const vals = pts.map(p => p.v);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi - lo < 1){ lo -= 0.5; hi += 0.5; }
+  const pad = (hi - lo) * 0.15; lo -= pad; hi += pad;
+  const t0 = pts[0].t.getTime(), t1 = pts[pts.length-1].t.getTime();
+  const x = t => L + (t - t0) / ((t1 - t0) || 1) * (W - L - R);
+  const y = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+
+  let out = "";
+  for (let i = 0; i < 4; i++){
+    const v = lo + (hi - lo) * i / 3, yy = y(v);
+    out += '<line x1="'+L+'" x2="'+(W-R)+'" y1="'+yy+'" y2="'+yy+'" stroke="#C5D6D1" stroke-width="1"/>';
+    out += '<text x="'+(L-6)+'" y="'+(yy+4)+'" text-anchor="end">'+v.toFixed(1).replace(".", ",")+'</text>';
+  }
+  const line = pts.map((p, i) => (i ? "L" : "M") + x(p.t.getTime()).toFixed(1) + " " + y(p.v).toFixed(1)).join(" ");
+  const area = line + " L" + x(t1).toFixed(1) + " " + (H-B) + " L" + x(t0).toFixed(1) + " " + (H-B) + " Z";
+  out += '<path d="'+area+'" fill="'+color+'" opacity=".10"/>';
+  out += '<path d="'+line+'" fill="none" stroke="'+color+'" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>';
+  const last = pts[pts.length-1];
+  out += '<circle cx="'+x(t1).toFixed(1)+'" cy="'+y(last.v).toFixed(1)+'" r="4.5" fill="'+color+'"/>';
+  out += '<text x="'+L+'" y="'+(H-6)+'">'+timeFmt(pts[0].t)+'</text>';
+  out += '<text x="'+(W-R)+'" y="'+(H-6)+'" text-anchor="end">'+timeFmt(last.t)+'</text>';
+  svg.innerHTML = out;
+}
+
+function summarize(pts, prefix){
+  if (!pts.length) return;
+  const v = pts.map(p => p.v);
+  $(prefix+"Now").textContent = fmt(v[v.length-1]);
+  $(prefix+"Min").textContent = fmt(Math.min(...v));
+  $(prefix+"Max").textContent = fmt(Math.max(...v));
+  $(prefix+"Avg").textContent = fmt(v.reduce((a,b)=>a+b,0)/v.length);
+}
+
+async function load(){
+  if (!/^\d+$/.test(CHANNEL_ID)){
+    setStatus("err", "Kanal numarası girilmemiş");
+    showMsg("index.html dosyasında CHANNEL_ID değerini ThingSpeak kanal numaranla değiştir.");
+    return;
+  }
+  try{
+    const res = await fetch("https://api.thingspeak.com/channels/"+CHANNEL_ID+"/feeds.json?results="+RESULTS, {cache:"no-store"});
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const feeds = data.feeds || [];
+    const tPts = [], hPts = [];
+    feeds.forEach(f => {
+      const t = new Date(f.created_at);
+      const a = parseFloat(f.field1), b = parseFloat(f.field2);
+      if (!isNaN(a)) tPts.push({t, v:a});
+      if (!isNaN(b)) hPts.push({t, v:b});
+    });
+    if (!feeds.length){
+      setStatus("stale", "Kanalda henüz veri yok");
+      showMsg("Kanal boş görünüyor. ESP8266 çalışıyor ve ThingSpeak'e veri gönderiyor mu? Serial Monitor'dan kontrol et.");
+      return;
+    }
+    showMsg("");
+    summarize(tPts, "t"); summarize(hPts, "h");
+    drawChart($("tChart"), tPts, "#D9532B");
+    drawChart($("hChart"), hPts, "#1F6F8B");
+
+    const lastTime = new Date(feeds[feeds.length-1].created_at);
+    const ageMin = (Date.now() - lastTime.getTime()) / 60000;
+    const when = lastTime.toLocaleString("tr-TR", {day:"numeric", month:"long", hour:"2-digit", minute:"2-digit"});
+    if (ageMin < 2) setStatus("live", "Canlı · son ölçüm " + when);
+    else setStatus("stale", "Cihaz " + Math.round(ageMin) + " dakikadır veri göndermedi · son ölçüm " + when);
+  }catch(e){
+    setStatus("err", "Veri alınamadı");
+    showMsg("ThingSpeak'e ulaşılamadı. Kanalın Sharing sekmesinde herkese açık olduğundan ve kanal numarasının doğru olduğundan emin ol. (" + e.message + ")");
+  }
+}
+load();
+setInterval(load, REFRESH_MS);
+</script>
+</body>
+</html>
